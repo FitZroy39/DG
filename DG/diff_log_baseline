@@ -1,0 +1,99 @@
+diff --git a/common/perception_gflags.cc b/common/perception_gflags.cc
+index 8d9023d7e..aeccca39e 100644
+--- a/common/perception_gflags.cc
++++ b/common/perception_gflags.cc
+@@ -500,3 +500,6 @@ DEFINE_string(lidar_bev_remote_visualizer_config,
+               "config/modules/perception_v2/conf/obstacle/lidar/"
+               "lidar_bev_remote_visualizer_config.pb.txt",
+               "lidar bev remote visualzier config filename.");
++
++DEFINE_bool(make_grid_benchmark, true, "make grid benchmark or not");
++DEFINE_string(grid_img_path, "/fabupilot/baseline/temp", "the path of grid_img");
+\ No newline at end of file
+diff --git a/common/perception_gflags.h b/common/perception_gflags.h
+index 091086045..e1430f358 100644
+--- a/common/perception_gflags.h
++++ b/common/perception_gflags.h
+@@ -198,4 +198,6 @@ DECLARE_bool(use_coastline);
+ DECLARE_bool(log_coastline_dev);
+ DECLARE_double(interpolate_residus);
+ 
++DECLARE_bool(make_grid_benchmark);
++DECLARE_string(grid_img_path);
+ #endif  // MODULES_PERCEPTION_V2_COMMON_PERCEPTION_GFLAGS_H_
+diff --git a/obstacle/lidar/ground_segmentor/ray_segmentor/ray_segmentor.cc b/obstacle/lidar/ground_segmentor/ray_segmentor/ray_segmentor.cc
+index a214691e6..12624588b 100644
+--- a/obstacle/lidar/ground_segmentor/ray_segmentor/ray_segmentor.cc
++++ b/obstacle/lidar/ground_segmentor/ray_segmentor/ray_segmentor.cc
+@@ -3,7 +3,7 @@
+  *****************************************************************************/
+ 
+ #include "modules/perception_v2/obstacle/lidar/ground_segmentor/ray_segmentor/ray_segmentor.h"
+-
++#include <time.h>
+ #include <algorithm>
+ #include <functional>
+ #include <limits>
+@@ -57,6 +57,14 @@ inline int GetNthMaximumIndex(const float percentile, const int max_index,
+ using fabupilot::common::VehicleManager;
+ using fabupilot::common::util::GetProtoFromFile;
+ 
++std::string Timestamp2DateStr(time_t timestamp, const char *fmt = "%H_%M_%d_%m_%Y") {
++  struct tm dt;
++  char buffer[50];
++  localtime_r(&timestamp, &dt);
++  strftime(buffer, sizeof(buffer), fmt, &dt);
++  return std::string(buffer);
++}
++
+ bool RaySegmentor::Segment(
+     const PointCloudData &cloud_data, const GroundSegmentorOptions &options,
+     fabupilot::common::math::Grid2d<Ground> *const ground_grids,
+@@ -79,6 +87,47 @@ bool RaySegmentor::Segment(
+   UpdateObstacleGrid(cloud, options, ray_indexs, cell_indexs, valid_point_index,
+                      ground_grids, ground_indices);
+   PERF_BLOCK_END("[Ground segmentor] update obstacle indices");
++  if (FLAGS_make_grid_benchmark) {
++      namespace fs = std::filesystem;
++      std::string gt_folder  = FLAGS_grid_img_path + Timestamp2DateStr(options.timestamp);
++
++      std::string gt_file = gt_folder + "/" + std::to_string(options.timestamp) + ".txt";
++      std::cout << "The file is " << gt_file << std::endl;
++
++      auto gen_folder = [&](const std::string& name) {
++        CHECK_EQ(name.empty(),false);
++        if (!fs::directory_entry(name).exists()) {
++          try {
++            fs::create_directories(name);
++          }
++          catch (fs::filesystem_error const& ex) {
++            std::cout << ex.what() << '\n'
++                      << ex.path1() << '\n';
++          }
++          fs::permissions(name, fs::perms::others_all, fs::perm_options::remove);
++        }
++      };
++      if (gt_folder.empty()) {
++        AERROR << "Empty grid txt path and pcd folder path";
++        return false;
++      }
++      gen_folder(gt_folder);
++
++      std::ofstream fout(gt_file);
++      for (size_t col = 0; col < ground_grids->col(); ++col) {
++        for (size_t row = 0; row < ground_grids->row(); ++row) {
++          auto& grid = (*ground_grids)(row, col);
++          if (!grid.is_obstacle)
++            continue;
++          fout << row << " " << col << " " << grid.is_obstacle << " " 
++                 << grid.is_static_obstacle 
++                 //<< " " << grid.is_invalid
++                 << " " << grid.margin_left << " " << grid.margin_right
++                 << " " << grid.margin_close << '\n';
++        }
++      }
++      fout.close();
++  }
+   return true;
+ }
+ 
